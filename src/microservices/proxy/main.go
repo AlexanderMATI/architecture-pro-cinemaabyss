@@ -132,11 +132,7 @@ func mainHandler(config *ProxyConfig) http.HandlerFunc {
 
 // healthHandler обработчик проверки здоровья
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	response := map[string]string{
-		"status":   "healthy",
-		"service":  "strangler-fig-proxy",
-		"datetime": time.Now().Format(time.RFC3339),
-	}
+
 	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
