@@ -41,7 +41,7 @@ spec:
               name: cinemaabyss-config
               key: DB_NAME
         resources:
-          {{- toYaml .Values.database.resources | nindent 10 }}
+          {{- toYaml .Values.database.resources | nindent 18 }}
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data

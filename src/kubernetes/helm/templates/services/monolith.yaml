@@ -20,6 +20,9 @@ spec:
       maxUnavailable: 0
   template:
     metadata:
+      annotations:
+        checksum/config: '{ { include (print $.Template.BasePath "/configmap.yaml") . | sha256sum } }'
+        checksum/secret: '{ { include (print $.Template.BasePath "/secret.yaml") . | sha256sum } }'
       labels:
         app: monolith
     spec:
@@ -40,7 +43,7 @@ spec:
         - secretRef:
             name: cinemaabyss-secrets
         resources:
-          {{- toYaml .Values.monolith.resources | nindent 10 }}
+          {{- toYaml .Values.monolith.resources | nindent 18 }}
         readinessProbe:
           httpGet:
             path: /api/users
