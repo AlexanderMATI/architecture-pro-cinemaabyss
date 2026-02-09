@@ -424,6 +424,8 @@ You can see 21 for the upstream_rq_pending_overflow value which means 21 calls s
 ```
 
 Приложите скриншот работы circuit breaker'а
+[Скрин 1](https://github.com/AlexanderMATI/architecture-pro-cinemaabyss/blob/cinemaabyss/screen/task5%201.png)
+[Скрин 2](https://github.com/AlexanderMATI/architecture-pro-cinemaabyss/blob/cinemaabyss/screen/task5%202.png)
 
 Удаляем все
 ```bash
