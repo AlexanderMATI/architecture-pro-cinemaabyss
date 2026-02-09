@@ -1,0 +1,48 @@
+@startuml
+!include <C4/C4_Container>
+
+skinparam {
+    backgroundColor #FAFAFA
+    roundCorner 20
+    shadowing true
+    wrapWidth 200
+}
+
+Person(user, "User", "Клиент, использующий систему 'Кинобездна' через веб-интерфейс.")
+System_Ext(recommend_system, "External Recommend System", "Внешняя рекомендательная система")
+System_Ext(online_cinemas, "Online Cinemas", "Онлайн кинотеатры")
+
+
+
+System_Boundary(c1, "") {
+
+
+    Container(api_gateway, "API gateway", "Go", "Маршрутизирует трафик")
+
+    Container(monolith, "Monolith", "Go", "Отвечает за управление пользователями, данными фильмов, платежами, подписками")
+    ContainerDb(monolith_db, "Monolith DB", "PostgreSQL", "Хранит информацию о профилях пользователей, метаданных фильмов, платежей, подписках")
+
+    Container(movies_service, "Movies Service", "Go", "Отвечает за регистрацию, настройку и управление метаданными устройств")
+    ContainerDb(movies_db, "Movies DB", "PostgreSQL", "Хранит информацию о метаданных фильмов, платежей, подписках")
+
+    Container(events_service, "Events Service", "Go", "Обрабатывает коммуникацию между сервисами на основе событий (фильмы, пользователи, платежи с Kafka)")
+    Container(message_broker, "Message Broker", "Kafka", "Обеспечивает асинхронную и надёжную доставку событий")
+}
+
+Rel(user, api_gateway, "Просматривает данные", "HTTPS")
+
+
+Rel(api_gateway, monolith, "Обрабатывает запросы для аутентификации, профилей и т.п.", "HTTP")
+Rel(api_gateway, movies_service, "Обрабатывает запросы метаданных фильмов, платежей, подписок", "HTTP")
+Rel(api_gateway, events_service, "Обрабатывает запросы сообщений", "HTTP")
+
+Rel(monolith, monolith_db, "Читает или пишет данные", "TCP/IP")
+Rel(movies_service, movies_db, "Читает или пишет данные", "TCP/IP")
+
+Rel(events_service, message_broker, "Отправляет сообщения", "TCP/IP")
+
+Rel(monolith, recommend_system, "Отправляет или получает данные в рекомендательную систему")
+Rel(monolith, online_cinemas, "Отправляет данные в онлайн-кинотеатры", "HTTPS")
+
+
+@enduml
