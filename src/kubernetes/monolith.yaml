@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: monolith
-        image:  ghcr.io/AlexanderMATI/architecture-pro-cinemaabyss/monolith:latest
+        image:  ghcr.io/alexandermati/architecture-pro-cinemaabyss/monolith:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
