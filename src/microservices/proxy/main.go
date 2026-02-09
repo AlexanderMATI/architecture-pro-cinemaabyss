@@ -48,9 +48,19 @@ func main() {
 		log.Fatalf("Failed to parse EVENTS_SERVICE_URL: %v", err)
 	}
 
-	monolithProxy := httputil.NewSingleHostReverseProxy(monoURL)
-	moviesProxy := httputil.NewSingleHostReverseProxy(movURL)
-	eventsProxy := httputil.NewSingleHostReverseProxy(evtURL)
+// healthHandler обработчик проверки здоровья
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	
+	// В реальном приложении здесь был бы json.NewEncoder
+	jsonResponse := `{"status":"healthy","service":"strangler-fig-proxy","datetime":"` + 
+		time.Now().Format(time.RFC3339) + `"}`
+	
+	w.Write([]byte(jsonResponse))
+}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Incoming request: %s %s", r.Method, r.URL.Path)

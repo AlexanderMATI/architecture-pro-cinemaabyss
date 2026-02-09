@@ -13,218 +13,152 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// Структуры событий с добавленными тегами для валидации
 type MovieEvent struct {
-	MovieID int    `json:"movie_id" validate:"required"`
-	Title   string `json:"title" validate:"required"`
-	Action  string `json:"action" validate:"required"`
-	UserID  int    `json:"user_id" validate:"required"`
+	MovieID int    `json:"movie_id"`
+	Title   string `json:"title"`
+	Action  string `json:"action"`
+	UserID  int    `json:"user_id"`
 }
 
 type UserEvent struct {
-	UserID    int       `json:"user_id" validate:"required"`
-	Username  string    `json:"username" validate:"required"`
-	Action    string    `json:"action" validate:"required"`
-	Timestamp time.Time `json:"timestamp" validate:"required"`
+	UserID    int       `json:"user_id"`
+	Username  string    `json:"username"`
+	Action    string    `json:"action"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 type PaymentEvent struct {
-	PaymentID int       `json:"payment_id" validate:"required"`
-	UserID    int       `json:"user_id" validate:"required"`
-	Amount    float64   `json:"amount" validate:"required"`
-	Status    string    `json:"status" validate:"required"`
-	Timestamp time.Time `json:"timestamp" validate:"required"`
+	PaymentID int       `json:"payment_id"`
+	UserID    int       `json:"user_id"`
+	Amount    float64   `json:"amount"`
+	Status    string    `json:"status"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
-// Константы для названий топиков
+var writer *kafka.Writer
+
 const (
 	movieTopic   = "movie-events"
 	userTopic    = "user-events"
 	paymentTopic = "payment-events"
 )
 
-var (
-	kafkaWriter *kafka.Writer
-	once        sync.Once
-)
-
-// getEnv возвращает значение переменной окружения или значение по умолчанию
 func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
+	if value, ok := os.LookupEnv(key); ok {
 		return value
 	}
 	return fallback
 }
 
-// initKafkaWriter инициализирует Kafka writer (используется паттерн singleton)
-func initKafkaWriter() *kafka.Writer {
+func main() {
 	kafkaBrokers := getEnv("KAFKA_BROKERS", "localhost:9092")
 	brokers := strings.Split(kafkaBrokers, ",")
 
-	return &kafka.Writer{
+	writer = &kafka.Writer{
 		Addr:     kafka.TCP(brokers...),
 		Balancer: &kafka.LeastBytes{},
 	}
-}
-
-// getKafkaWriter возвращает экземпляр Kafka writer
-func getKafkaWriter() *kafka.Writer {
-	once.Do(func() {
-		kafkaWriter = initKafkaWriter()
-	})
-	return kafkaWriter
-}
-
-func main() {
-	// Инициализация Kafka writer
-	writer := getKafkaWriter()
 	defer writer.Close()
 
-	// Запуск потребителей для каждого топика
 	var wg sync.WaitGroup
 	topics := []string{movieTopic, userTopic, paymentTopic}
-
 	for _, topic := range topics {
 		wg.Add(1)
-		go consumeTopic(context.Background(), topic, &wg)
+		go consume(context.Background(), topic, &wg)
 	}
 
-	// Настройка HTTP маршрутов
 	http.HandleFunc("/api/events/movie", handleEvent(movieTopic))
 	http.HandleFunc("/api/events/user", handleEvent(userTopic))
 	http.HandleFunc("/api/events/payment", handleEvent(paymentTopic))
-	http.HandleFunc("/api/events/health", healthCheckHandler)
+	http.HandleFunc("/api/events/health", handleHealth)
 
-	// Запуск HTTP сервера
 	port := getEnv("PORT", "8082")
-	log.Printf("Сервис событий запускается на порту %s", port)
-	log.Printf("Подключение к Kafka brokers: %s", getEnv("KAFKA_BROKERS", "localhost:9092"))
-
+	log.Printf("Events service starting on port %s", port)
+	log.Printf("Connecting to Kafka brokers at %s", kafkaBrokers)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatalf("Ошибка запуска сервера: %v", err)
+		log.Fatalf("Failed to start server: %v", err)
 	}
 
 	wg.Wait()
 }
 
-// handleEvent создает обработчик для разных типов событий
 func handleEvent(topic string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Проверка метода HTTP
 		if r.Method != http.MethodPost {
-			http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Парсинг события в зависимости от топика
-		eventData, err := parseEventData(topic, r)
-		if err != nil {
+		var eventData interface{}
+		switch topic {
+		case movieTopic:
+			eventData = &MovieEvent{}
+		case userTopic:
+			eventData = &UserEvent{}
+		case paymentTopic:
+			eventData = &PaymentEvent{}
+		default:
+			http.Error(w, "Unknown event type", http.StatusBadRequest)
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(eventData); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		// Отправка события в Kafka
-		if err := sendToKafka(topic, eventData); err != nil {
-			log.Printf("Ошибка отправки в Kafka: %v", err)
-			http.Error(w, "Ошибка обработки события", http.StatusInternalServerError)
+		eventBytes, err := json.Marshal(eventData)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// Успешный ответ
-		sendSuccessResponse(w, topic, eventData)
+		err = writer.WriteMessages(context.Background(), kafka.Message{
+			Topic: topic,
+			Value: eventBytes,
+		})
+
+		if err != nil {
+			log.Printf("Failed to write message to Kafka: %v", err)
+			http.Error(w, "Failed to write message to Kafka", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Successfully produced message to topic %s: %s", topic, string(eventBytes))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 	}
 }
 
-// parseEventData парсит тело запроса в соответствующую структуру
-func parseEventData(topic string, r *http.Request) (interface{}, error) {
-	var eventData interface{}
-
-	switch topic {
-	case movieTopic:
-		eventData = &MovieEvent{}
-	case userTopic:
-		eventData = &UserEvent{}
-	case paymentTopic:
-		eventData = &PaymentEvent{}
-	default:
-		return nil, &json.UnsupportedTypeError{}
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(eventData); err != nil {
-		return nil, err
-	}
-
-	return eventData, nil
-}
-
-// sendToKafka отправляет событие в Kafka
-func sendToKafka(topic string, eventData interface{}) error {
-	eventBytes, err := json.Marshal(eventData)
-	if err != nil {
-		return err
-	}
-
-	writer := getKafkaWriter()
-	message := kafka.Message{
-		Topic: topic,
-		Value: eventBytes,
-	}
-
-	return writer.WriteMessages(context.Background(), message)
-}
-
-// sendSuccessResponse отправляет успешный HTTP ответ
-func sendSuccessResponse(w http.ResponseWriter, topic string, eventData interface{}) {
-	eventBytes, _ := json.Marshal(eventData)
-	log.Printf("Сообщение отправлено в топик %s: %s", topic, string(eventBytes))
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "success",
-		"message": "Событие успешно обработано",
-	})
-}
-
-// healthCheckHandler обработчик проверки здоровья сервиса
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	response := map[string]interface{}{
-		"status":    true,
-		"service":   "events-service",
-		"timestamp": time.Now().UTC(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]bool{"status": true})
 }
 
-// consumeTopic потребляет сообщения из указанного топика Kafka
-func consumeTopic(ctx context.Context, topic string, wg *sync.WaitGroup) {
+func consume(ctx context.Context, topic string, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	kafkaBrokers := getEnv("KAFKA_BROKERS", "localhost:9092")
 	brokers := strings.Split(kafkaBrokers, ",")
 
-	reader := kafka.NewReader(kafka.ReaderConfig{
+	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    topic,
 		GroupID:  "cinemaabyss-events-consumer-group",
 		MinBytes: 10e3,
 		MaxBytes: 10e6,
 	})
-	defer reader.Close()
+	defer r.Close()
 
-	log.Printf("Потребитель запущен для топика: %s", topic)
+	log.Printf("Consumer started for topic %s", topic)
 
 	for {
-		message, err := reader.ReadMessage(ctx)
+		m, err := r.ReadMessage(ctx)
 		if err != nil {
-			log.Printf("Ошибка чтения из топика %s: %v", topic, err)
+			log.Printf("Error reading message from topic %s: %v", topic, err)
 			break
 		}
-
-		log.Printf("[ПОТРЕБИТЕЛЬ] Топик: %s, Смещение: %d, Сообщение: %s",
-			message.Topic, message.Offset, string(message.Value))
+		log.Printf("[CONSUMER] Received message from topic %s at offset %d: %s = %s\n", m.Topic, m.Offset, string(m.Key), string(m.Value))
 	}
 }
