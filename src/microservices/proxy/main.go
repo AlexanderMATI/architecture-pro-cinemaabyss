@@ -12,123 +12,41 @@ import (
 	"time"
 )
 
-// Конфигурация прокси
-type ProxyConfig struct {
-	Port                  string
-	MonolithURL           *url.URL
-	MoviesServiceURL      *url.URL
-	EventsServiceURL      *url.URL
-	GradualMigration      bool
-	MoviesMigrationPercent int
-}
-
-// getEnv возвращает значение переменной окружения или значение по умолчанию
 func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
+	if value, ok := os.LookupEnv(key); ok {
 		return value
 	}
 	return fallback
 }
 
-// parseURL безопасно парсит URL из строки
-func parseURL(rawURL, envVarName string) *url.URL {
-	parsedURL, err := url.Parse(rawURL)
-	if err != nil {
-		log.Fatalf("Ошибка парсинга %s: %v", envVarName, err)
-	}
-	return parsedURL
-}
+func main() {
+	rand.Seed(time.Now().UnixNano())
 
-// parseMigrationPercent парсит процент миграции
-func parseMigrationPercent(percentStr string) int {
-	percent, err := strconv.Atoi(percentStr)
-	if err != nil || percent < 0 || percent > 100 {
-		log.Printf("Некорректное значение MOVIES_MIGRATION_PERCENT '%s', используется 0", percentStr)
-		return 0
-	}
-	return percent
-}
-
-// loadConfig загружает конфигурацию из переменных окружения
-func loadConfig() *ProxyConfig {
-	// Инициализация генератора случайных чисел
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	
-	// Чтение конфигурации
 	port := getEnv("PORT", "8000")
 	monolithURL := getEnv("MONOLITH_URL", "http://localhost:8080")
 	moviesServiceURL := getEnv("MOVIES_SERVICE_URL", "http://localhost:8081")
 	eventsServiceURL := getEnv("EVENTS_SERVICE_URL", "http://localhost:8082")
-	gradualMigration := getEnv("GRADUAL_MIGRATION", "false") == "true"
+	gradualMigrationEnabled := getEnv("GRADUAL_MIGRATION", "false") == "true"
 	migrationPercentStr := getEnv("MOVIES_MIGRATION_PERCENT", "0")
-	
-	// Парсинг URL
-	monoURL := parseURL(monolithURL, "MONOLITH_URL")
-	movURL := parseURL(moviesServiceURL, "MOVIES_SERVICE_URL")
-	evtURL := parseURL(eventsServiceURL, "EVENTS_SERVICE_URL")
-	
-	// Парсинг процента миграции
-	migrationPercent := parseMigrationPercent(migrationPercentStr)
-	
-	return &ProxyConfig{
-		Port:                  port,
-		MonolithURL:           monoURL,
-		MoviesServiceURL:      movURL,
-		EventsServiceURL:      evtURL,
-		GradualMigration:      gradualMigration,
-		MoviesMigrationPercent: migrationPercent,
-	}
-}
 
-// createReverseProxy создает обратный прокси для указанного URL
-func createReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {
-	return httputil.NewSingleHostReverseProxy(targetURL)
-}
-
-// shouldRouteToMovies определяет, нужно ли маршрутизировать запрос к сервису фильмов
-func shouldRouteToMovies(config *ProxyConfig) bool {
-	if !config.GradualMigration {
-		return false
+	migrationPercent, err := strconv.Atoi(migrationPercentStr)
+	if err != nil {
+		log.Printf("Invalid MOVIES_MIGRATION_PERCENT value, defaulting to 0. Error: %v", err)
+		migrationPercent = 0
 	}
-	
-	// Генерация случайного числа от 0 до 99
-	randomValue := rand.Intn(100)
-	return randomValue < config.MoviesMigrationPercent
-}
 
-// routeRequest определяет куда маршрутизировать запрос
-func routeRequest(config *ProxyConfig, path string) (*httputil.ReverseProxy, string) {
-	switch {
-	case strings.HasPrefix(path, "/api/movies"):
-		if shouldRouteToMovies(config) {
-			return createReverseProxy(config.MoviesServiceURL), "movies-service"
-		}
-		return createReverseProxy(config.MonolithURL), "monolith"
-		
-	case strings.HasPrefix(path, "/api/events"):
-		return createReverseProxy(config.EventsServiceURL), "events-service"
-		
-	default:
-		return createReverseProxy(config.MonolithURL), "monolith"
+	monoURL, err := url.Parse(monolithURL)
+	if err != nil {
+		log.Fatalf("Failed to parse MONOLITH_URL: %v", err)
 	}
-}
-
-// mainHandler обрабатывает входящие HTTP запросы
-func mainHandler(config *ProxyConfig) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Логирование входящего запроса
-		log.Printf("Входящий запрос: %s %s", r.Method, r.URL.Path)
-		
-		// Определение целевого сервиса и создание прокси
-		proxy, targetService := routeRequest(config, r.URL.Path)
-		
-		// Логирование маршрутизации
-		log.Printf("Маршрутизация к %s", targetService)
-		
-		// Проксирование запроса
-		proxy.ServeHTTP(w, r)
+	movURL, err := url.Parse(moviesServiceURL)
+	if err != nil {
+		log.Fatalf("Failed to parse MOVIES_SERVICE_URL: %v", err)
 	}
-}
+	evtURL, err := url.Parse(eventsServiceURL)
+	if err != nil {
+		log.Fatalf("Failed to parse EVENTS_SERVICE_URL: %v", err)
+	}
 
 // healthHandler обработчик проверки здоровья
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -144,36 +62,39 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(jsonResponse))
 }
 
-// logConfig выводит конфигурацию при запуске
-func logConfig(config *ProxyConfig) {
-	log.Printf("Strangler Fig Proxy запущен на порту %s", config.Port)
-	log.Printf("Монолит URL: %s", config.MonolithURL.String())
-	log.Printf("Сервис фильмов URL: %s", config.MoviesServiceURL.String())
-	log.Printf("Сервис событий URL: %s", config.EventsServiceURL.String())
-	log.Printf("Постепенная миграция включена: %v", config.GradualMigration)
-	log.Printf("Процент миграции фильмов: %d%%", config.MoviesMigrationPercent)
-}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Incoming request: %s %s", r.Method, r.URL.Path)
 
-func main() {
-	// Загрузка конфигурации
-	config := loadConfig()
-	
-	// Создание прокси для каждого сервиса
-	// (в реальном коде они создаются в routeRequest, но можно кэшировать)
-	
-	// Настройка HTTP обработчиков
-	http.HandleFunc("/", mainHandler(config))
-	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/api/health", healthHandler)
-	
-	// Логирование конфигурации
-	logConfig(config)
-	
-	// Запуск HTTP сервера
-	serverAddr := ":" + config.Port
-	log.Printf("Запуск сервера на %s", serverAddr)
-	
-	if err := http.ListenAndServe(serverAddr, nil); err != nil {
-		log.Fatalf("Ошибка запуска сервера: %v", err)
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/movies"):
+			if gradualMigrationEnabled && rand.Intn(100) < migrationPercent {
+				log.Printf("Routing to movies-service (migration)")
+				moviesProxy.ServeHTTP(w, r)
+			} else {
+				log.Printf("Routing to monolith")
+				monolithProxy.ServeHTTP(w, r)
+			}
+		case strings.HasPrefix(r.URL.Path, "/api/events"):
+			log.Printf("Routing to events-service")
+			eventsProxy.ServeHTTP(w, r)
+		default:
+			log.Printf("Routing to monolith (default)")
+			monolithProxy.ServeHTTP(w, r)
+		}
+	})
+
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Strangler Fig Proxy is healthy"))
+	})
+
+	log.Printf("Strangler Fig Proxy started on port %s", port)
+	log.Printf("Monolith URL: %s", monolithURL)
+	log.Printf("Movies Service URL: %s", moviesServiceURL)
+	log.Printf("Gradual migration enabled: %v", gradualMigrationEnabled)
+	log.Printf("Movies migration percentage: %d%%", migrationPercent)
+
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
 	}
 }
